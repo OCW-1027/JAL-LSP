@@ -1,0 +1,25 @@
+# Database (auto-generated, not for git)
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+Thumbs.db
