@@ -201,11 +201,14 @@ def _generate_chains(start_airport: str, end_airport: Optional[str],
                      max_revisits: int = 5,
                      top_n: int = 50,
                      time_budget_sec: float = 2.0,
-                     force_first_dest: Optional[str] = None
+                     force_first_dest: Optional[str] = None,
+                     allowed_airports: Optional[set[str]] = None
                      ) -> list[list[dict]]:
     """체인 검색 DFS.
 
     force_first_dest: 첫 비행의 도착지를 고정 (다양성 보장용).
+    allowed_airports: None이면 모든 공항 허용. 지정 시 이 set 안의 공항만 사용.
+                      start_airport와 end_airport는 자동으로 포함됨.
     """
     chains: list[list[dict]] = []
     seen_sigs: set = set()
@@ -254,6 +257,12 @@ def _generate_chains(start_airport: str, end_airport: Optional[str],
                 continue
 
             next_airport = f["destination"]
+
+            # 조합 공항 제한 (allowed_airports)
+            if allowed_airports is not None:
+                if next_airport not in allowed_airports:
+                    continue
+
             next_visit_count = sum(1 for ff in path
                                     if ff["destination"] == next_airport)
             if next_visit_count >= max_revisits:
@@ -279,13 +288,19 @@ def search_day_chains(bases: list[str], flight_date: date,
                       top_n: int = 30,
                       time_start_min: int = 6 * 60,
                       time_end_min: int = 22 * 60,
-                      time_budget_sec: float = 4.0) -> list[Route]:
+                      time_budget_sec: float = 4.0,
+                      allowed_airports: Optional[set[str]] = None
+                      ) -> list[Route]:
     """당일치기 체인 검색. 첫 도시별로 따로 탐색해 다양성 보장."""
     flights = _flights_by_origin_cache(flight_date)
     all_chains = []
 
+    # 베이스가 allowed에 없으면 자동으로 추가 (시작/종료 공항)
+    effective_allowed = None
+    if allowed_airports is not None:
+        effective_allowed = set(allowed_airports) | set(bases)
+
     for base in bases:
-        # base에서 시간 윈도우 안에 출발 가능한 첫 목적지들
         valid_first_dests = []
         seen_dest = set()
         for f in flights.get(base, []):
@@ -295,6 +310,8 @@ def search_day_chains(bases: list[str], flight_date: date,
             arr_min = _to_min(f["arr_time"])
             if arr_min > time_end_min:
                 continue
+            if effective_allowed is not None and f["destination"] not in effective_allowed:
+                continue
             if f["destination"] not in seen_dest:
                 seen_dest.add(f["destination"])
                 valid_first_dests.append(f["destination"])
@@ -302,7 +319,6 @@ def search_day_chains(bases: list[str], flight_date: date,
         if not valid_first_dests:
             continue
 
-        # 첫 목적지별 시간 예산 분배
         per_dest_budget = max(time_budget_sec / max(len(bases), 1)
                                / max(len(valid_first_dests), 1), 0.3)
         per_dest_top = max(top_n // max(len(valid_first_dests), 1), 3)
@@ -314,6 +330,7 @@ def search_day_chains(bases: list[str], flight_date: date,
                 time_start_min=time_start_min, time_end_min=time_end_min,
                 top_n=per_dest_top, time_budget_sec=per_dest_budget,
                 force_first_dest=first_dest,
+                allowed_airports=effective_allowed,
             )
             all_chains.extend(chains)
 
@@ -325,14 +342,16 @@ def search_day_chains(bases: list[str], flight_date: date,
         routes.append(r)
 
     routes.sort(key=lambda r: -r.score)
-    return routes[:top_n * 3]  # 다양화 위해 더 많이 반환
+    return routes[:top_n * 3]
 
 
 def search_overnight_chains(bases: list[str], start_date: date, nights: int,
                             fare_class: str = "Saver",
                             min_segments: int = 3, max_segments: int = 12,
                             top_n: int = 30,
-                            time_budget_sec: float = 8.0) -> list[Route]:
+                            time_budget_sec: float = 8.0,
+                            allowed_airports: Optional[set[str]] = None
+                            ) -> list[Route]:
     """1박2일 / 2박3일 체인 검색.
 
     1박2일: D1 base→Y, D2 Y→base
@@ -351,6 +370,11 @@ def search_overnight_chains(bases: list[str], start_date: date, nights: int,
     seen = set()
     overall_start = _time.time()
 
+    # 베이스를 allowed에 자동 포함
+    effective_allowed = None
+    if allowed_airports is not None:
+        effective_allowed = set(allowed_airports) | set(bases)
+
     for base in bases:
         if _time.time() - overall_start > time_budget_sec:
             break
@@ -361,6 +385,8 @@ def search_overnight_chains(bases: list[str], start_date: date, nights: int,
         for f in flight_caches[days[0]].get(base, []):
             if (_to_min(f["dep_time"]) >= 6 * 60
                     and _to_min(f["arr_time"]) <= 22 * 60):
+                if effective_allowed is not None and f["destination"] not in effective_allowed:
+                    continue
                 if f["destination"] not in seen_dest and f["destination"] != base:
                     seen_dest.add(f["destination"])
                     valid_d1_first_dests.append(f["destination"])
@@ -372,6 +398,7 @@ def search_overnight_chains(bases: list[str], start_date: date, nights: int,
                 min_segments=1, max_segments=per_day_max,
                 top_n=5, time_budget_sec=per_search_budget,
                 force_first_dest=first_dest,
+                allowed_airports=effective_allowed,
             )
             d1_chains.extend(sub_chains)
 
@@ -389,6 +416,7 @@ def search_overnight_chains(bases: list[str], start_date: date, nights: int,
                     y, base, days[1], flight_caches[days[1]],
                     min_segments=1, max_segments=per_day_max,
                     top_n=10, time_budget_sec=per_search_budget,
+                    allowed_airports=effective_allowed,
                 )
                 for dl in last_chains:
                     if not dl:
@@ -410,6 +438,7 @@ def search_overnight_chains(bases: list[str], start_date: date, nights: int,
                     y, None, days[1], flight_caches[days[1]],
                     min_segments=0, max_segments=per_day_max,
                     top_n=8, time_budget_sec=per_search_budget,
+                    allowed_airports=effective_allowed,
                 )
                 for d2 in d2_chains:
                     if _time.time() - overall_start > time_budget_sec:
@@ -419,6 +448,7 @@ def search_overnight_chains(bases: list[str], start_date: date, nights: int,
                         z, base, days[2], flight_caches[days[2]],
                         min_segments=1, max_segments=per_day_max,
                         top_n=8, time_budget_sec=per_search_budget,
+                        allowed_airports=effective_allowed,
                     )
                     for dl in last_chains:
                         if not dl:
@@ -474,13 +504,28 @@ def search_routes(bases: list[str], start_date: date, end_date: date,
                   top_n: int = 30,
                   time_budget_sec: float = 6.0,
                   diversify: bool = True,
-                  max_per_first_dest: int = 2) -> list[Route]:
+                  max_per_first_dest: int = 2,
+                  must_include: Optional[list[str]] = None,
+                  allowed_airports: Optional[list[str]] = None
+                  ) -> list[Route]:
     """기간 내 모든 출발일 검색.
 
+    must_include: 루트가 반드시 거쳐야 할 공항 리스트. 모두 포함된 루트만 통과.
+    allowed_airports: 비행에 사용할 수 있는 공항 풀. None이면 전체 허용.
+                     베이스 공항은 자동으로 포함됨.
     diversify=True면 첫 번째 방문 도시별로 max_per_first_dest개씩만 상위에 노출
     (한 도시에 결과 쏠림 방지).
     """
     clear_fare_cache()
+
+    allowed_set: Optional[set[str]] = None
+    if allowed_airports:
+        allowed_set = set(allowed_airports) | set(bases)
+
+    must_set: Optional[set[str]] = None
+    if must_include:
+        must_set = set(must_include)
+
     all_routes = []
     cur = start_date
     while cur <= end_date:
@@ -488,8 +533,9 @@ def search_routes(bases: list[str], start_date: date, end_date: date,
             all_routes.extend(search_day_chains(
                 bases, cur, fare_class,
                 min_segments=min_segments, max_segments=max_segments,
-                top_n=top_n * 3,  # 다양화 위해 더 많이 모음
+                top_n=top_n * 3,
                 time_budget_sec=min(time_budget_sec, 4.0),
+                allowed_airports=allowed_set,
             ))
         elif pattern == "1n2d":
             if cur + timedelta(days=1) <= end_date:
@@ -498,6 +544,7 @@ def search_routes(bases: list[str], start_date: date, end_date: date,
                     min_segments=min_segments, max_segments=max_segments,
                     top_n=top_n * 3,
                     time_budget_sec=min(time_budget_sec, 6.0),
+                    allowed_airports=allowed_set,
                 ))
         elif pattern == "2n3d":
             if cur + timedelta(days=2) <= end_date:
@@ -506,8 +553,19 @@ def search_routes(bases: list[str], start_date: date, end_date: date,
                     min_segments=min_segments, max_segments=max_segments,
                     top_n=top_n * 3,
                     time_budget_sec=min(time_budget_sec, 8.0),
+                    allowed_airports=allowed_set,
                 ))
         cur += timedelta(days=1)
+
+    # must_include 필터: 루트가 지정된 공항을 모두 포함해야 함
+    if must_set:
+        def has_all(r: Route) -> bool:
+            visited = set()
+            for s in r.segments:
+                visited.add(s.origin)
+                visited.add(s.destination)
+            return must_set.issubset(visited)
+        all_routes = [r for r in all_routes if has_all(r)]
 
     all_routes.sort(key=lambda r: -r.score)
     if diversify:

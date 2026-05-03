@@ -152,11 +152,37 @@ with tabs[0]:
     base_codes = [b["code"] for b in all_bases]
     base_labels = {b["code"]: f"{b['code']} - {b['name_ko']}" for b in all_bases}
 
+    # 조건 1: 출발 베이스
     selected_bases = st.multiselect(
-        "출발 베이스 공항",
+        "① 출발 베이스 공항 (시작·종료점)",
         options=base_codes,
         default=["HND"],
         format_func=lambda c: base_labels.get(c, c),
+        help="루트가 시작·종료되는 공항. 복수 선택 가능.",
+    )
+
+    # 조건 2 & 3: 모든 공항 풀
+    all_aps = get_all_airports()
+    ap_codes = [a["code"] for a in all_aps]
+    ap_labels = {a["code"]: f"{a['code']} - {a['name_ko']}" for a in all_aps}
+
+    must_include = st.multiselect(
+        "② 반드시 포함할 공항 (선택)",
+        options=ap_codes,
+        default=[],
+        format_func=lambda c: ap_labels.get(c, c),
+        help="루트가 반드시 거쳐야 할 공항. 비워두면 무시됨. "
+             "예: OKA 선택 → 오키나와를 꼭 거치는 루트만 표시",
+    )
+
+    allowed_airports = st.multiselect(
+        "③ 조합 공항 — 사용 가능 공항 풀 (선택)",
+        options=ap_codes,
+        default=[],
+        format_func=lambda c: ap_labels.get(c, c),
+        help="여기 선택한 공항들 사이에서만 비행. 비워두면 모든 공항 사용. "
+             "베이스 공항은 자동 포함. "
+             "예: HND, ITM, OKA만 선택 → 이 3개 공항 사이에서만 조합",
     )
 
     cdate1, cdate2 = st.columns(2)
@@ -208,6 +234,10 @@ with tabs[0]:
         else:
             with st.spinner("검색 중..."):
                 results = {}
+                # 빈 리스트는 None으로 (필터 미적용)
+                _must = must_include if must_include else None
+                _allowed = allowed_airports if allowed_airports else None
+
                 if pattern_day:
                     results["day"] = search_routes(
                         selected_bases, start_date, end_date,
@@ -218,6 +248,8 @@ with tabs[0]:
                         time_budget_sec=float(time_budget),
                         diversify=diversify,
                         max_per_first_dest=max_per_first,
+                        must_include=_must,
+                        allowed_airports=_allowed,
                     )
                 if pattern_1n:
                     results["1n2d"] = search_routes(
@@ -229,6 +261,8 @@ with tabs[0]:
                         time_budget_sec=float(time_budget),
                         diversify=diversify,
                         max_per_first_dest=max_per_first,
+                        must_include=_must,
+                        allowed_airports=_allowed,
                     )
                 if pattern_2n:
                     results["2n3d"] = search_routes(
@@ -240,6 +274,8 @@ with tabs[0]:
                         time_budget_sec=float(time_budget),
                         diversify=diversify,
                         max_per_first_dest=max_per_first,
+                        must_include=_must,
+                        allowed_airports=_allowed,
                     )
 
             # 결과 표시
