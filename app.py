@@ -163,13 +163,14 @@ with tabs[0]:
     ap_codes = [a["code"] for a in all_aps]
     ap_labels = {a["code"]: f"{a['code']} - {a['name_jp']}" for a in all_aps}
 
-    must_include = st.multiselect(
-        "② 必ず含む空港 (任意)",
+    final_dests = st.multiselect(
+        "② 最終到着空港 (任意)",
         options=ap_codes,
         default=[],
         format_func=lambda c: ap_labels.get(c, c),
-        help="ルートが必ず経由する空港。空欄なら無視。"
-             "例: OKAを選択 → 沖縄を必ず経由するルートのみ表示",
+        help="ルートの最終到着空港。空欄なら任意の空港で終了 (片道OK)。"
+             "出発と同じ空港を選ぶと往復になります。"
+             "例: HND出発+OKA到着 → HND→...→OKA の片道ルート",
     )
 
     allowed_airports = st.multiselect(
@@ -178,8 +179,9 @@ with tabs[0]:
         default=[],
         format_func=lambda c: ap_labels.get(c, c),
         help="ここで選択した空港間でのみ飛行。空欄なら全空港使用可。"
-             "ベース空港は自動で含まれます。"
-             "例: HND, ITM, OKAのみ選択 → この3空港間のみで組合せ",
+             "③を指定すると①出発空港・②最終到着空港の指定は無視され、"
+             "③の中から自由に出発・到着・経由が組合せされます。"
+             "例: HND, ITM, OKAのみ選択 → この3空港間で自由に組合せ",
     )
 
     cdate1, cdate2 = st.columns(2)
@@ -231,7 +233,8 @@ with tabs[0]:
         else:
             with st.spinner("検索中..."):
                 results = {}
-                _must = must_include if must_include else None
+                # 빈 리스트는 None으로 (필터 미적용)
+                _final = final_dests if final_dests else None
                 _allowed = allowed_airports if allowed_airports else None
 
                 if pattern_day:
@@ -244,7 +247,7 @@ with tabs[0]:
                         time_budget_sec=float(time_budget),
                         diversify=diversify,
                         max_per_first_dest=max_per_first,
-                        must_include=_must,
+                        final_dests=_final,
                         allowed_airports=_allowed,
                     )
                 if pattern_1n:
@@ -257,7 +260,7 @@ with tabs[0]:
                         time_budget_sec=float(time_budget),
                         diversify=diversify,
                         max_per_first_dest=max_per_first,
-                        must_include=_must,
+                        final_dests=_final,
                         allowed_airports=_allowed,
                     )
                 if pattern_2n:
@@ -270,7 +273,7 @@ with tabs[0]:
                         time_budget_sec=float(time_budget),
                         diversify=diversify,
                         max_per_first_dest=max_per_first,
-                        must_include=_must,
+                        final_dests=_final,
                         allowed_airports=_allowed,
                     )
 
