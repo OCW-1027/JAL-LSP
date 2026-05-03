@@ -226,8 +226,8 @@ with tabs[0]:
 
     # 検索ボタン
     if st.button("🔍 ルート検索", type="primary", width='stretch'):
-        if not selected_bases:
-            st.error("出発空港を選択してください。")
+        if not selected_bases and not allowed_airports:
+            st.error("①出発空港または③組合せ空港のいずれかを選択してください。")
         elif end_date < start_date:
             st.error("終了日が開始日より前です。")
         else:
