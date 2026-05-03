@@ -1,11 +1,11 @@
-"""JAL LSP Optimizer — Streamlit Web App.
+"""JAL LSP Optimizer — Streamlit Web App (日本語版).
 
-실행:
+実行:
     streamlit run app.py
 
-휴대폰에서 접속하려면:
+スマホからアクセス (同じWiFi):
     streamlit run app.py --server.address 0.0.0.0
-    같은 WiFi의 휴대폰 브라우저에서 http://[PC_IP]:8501
+    スマホブラウザで http://[PC_IP]:8501
 """
 
 from datetime import date, datetime, timedelta
@@ -25,18 +25,17 @@ st.set_page_config(
     page_title="JAL LSP Optimizer",
     page_icon="✈️",
     layout="wide",
-    initial_sidebar_state="collapsed",  # 모바일 친화: 사이드바 닫혀서 시작
+    initial_sidebar_state="collapsed",
 )
 
 
-# ===== 초기화 (Streamlit Cloud 자동 시드 + CSV 임포트) =====
+# ===== 初期化 (Streamlit Cloud 自動シード + CSV 自動インポート) =====
 @st.cache_resource
 def _init():
-    """앱 시작 시 자동 초기화.
+    """アプリ起動時の自動初期化.
 
-    - DB가 비어있으면: seed() 실행 (공항·노선 데이터)
-    - flights 테이블이 비어있으면: data/ 폴더 CSV 자동 임포트
-      (Streamlit Cloud는 재시작 시 DB가 사라질 수 있어 자동 복원 필요)
+    - DBが空なら: seed() を実行 (空港・路線データ)
+    - flightsが空なら: data/ フォルダの CSV を自動インポート
     """
     import os
     init_db()
@@ -49,7 +48,6 @@ def _init():
     with get_conn() as c:
         flight_count = c.execute("SELECT COUNT(*) FROM flights").fetchone()[0]
     if flight_count == 0:
-        # data/ 폴더의 CSV 자동 임포트
         from csv_import import import_csv_file
         data_dir = os.path.join(os.path.dirname(__file__), "data")
         if os.path.isdir(data_dir):
@@ -61,18 +59,18 @@ def _init():
                 try:
                     import_csv_file(path, mode=mode)
                 except Exception as e:
-                    print(f"CSV 임포트 실패 {csv_file}: {e}")
+                    print(f"CSV インポート失敗 {csv_file}: {e}")
     return True
 
 _init()
 
 
-# ===== 사이드바 =====
-st.sidebar.title("⚙️ 설정 / 데이터")
+# ===== サイドバー =====
+st.sidebar.title("⚙️ 設定 / データ")
 
-with st.sidebar.expander("🔌 Amadeus API (선택)"):
-    st.caption("월 2,000콜 무료. 체크박스 켤 때만 호출.")
-    use_amadeus = st.checkbox("Amadeus API 사용",
+with st.sidebar.expander("🔌 Amadeus API (任意)"):
+    st.caption("月2,000コール無料。チェックON時のみ呼び出し。")
+    use_amadeus = st.checkbox("Amadeus API を使用",
                               value=False, key="use_amadeus")
     amadeus_id = st.text_input("Client ID",
                                 value=get_setting("amadeus_client_id", ""),
@@ -80,161 +78,159 @@ with st.sidebar.expander("🔌 Amadeus API (선택)"):
     amadeus_secret = st.text_input("Client Secret",
                                     value=get_setting("amadeus_client_secret", ""),
                                     type="password")
-    if st.button("API 키 저장"):
+    if st.button("APIキーを保存"):
         set_setting("amadeus_client_id", amadeus_id)
         set_setting("amadeus_client_secret", amadeus_secret)
-        st.success("저장됨")
+        st.success("保存しました")
 
     quota = amadeus_quota_status()
     color = {"ok": "🟢", "warn": "🟡", "blocked": "🔴"}[quota["level"]]
-    st.markdown(f"{color} {quota['used']:,} / {quota['limit']:,}콜 ({quota['pct']}%)")
+    st.markdown(f"{color} {quota['used']:,} / {quota['limit']:,}コール ({quota['pct']}%)")
 
-with st.sidebar.expander("📅 시각표 CSV 임포트"):
+with st.sidebar.expander("📅 時刻表 CSV インポート"):
     from csv_import import import_csv, routes_with_data
 
-    st.caption("JAL 시각표 CSV 업로드.")
-    uploaded = st.file_uploader("CSV 파일", type=["csv"], key="csv_upload")
+    st.caption("JAL時刻表 CSVをアップロード")
+    uploaded = st.file_uploader("CSV ファイル", type=["csv"], key="csv_upload")
     import_mode = st.radio(
-        "모드",
+        "モード",
         options=["merge", "replace_route", "replace_all"],
         format_func=lambda m: {
-            "merge": "병합",
-            "replace_route": "노선별 교체",
-            "replace_all": "전체 교체",
+            "merge": "マージ",
+            "replace_route": "路線別に置換",
+            "replace_all": "全置換",
         }[m],
         index=1,
     )
 
-    if uploaded and st.button("📥 임포트 실행"):
+    if uploaded and st.button("📥 インポート実行"):
         result = import_csv(uploaded.read(), mode=import_mode)
         if result["success"]:
-            st.success(f"✅ {result['imported']}건 / {result['routes_affected']}개 노선")
+            st.success(f"✅ {result['imported']}件 / {result['routes_affected']}路線")
             if result["errors"]:
-                with st.expander(f"⚠️ 경고 {len(result['errors'])}건"):
+                with st.expander(f"⚠️ 警告 {len(result['errors'])}件"):
                     for e in result["errors"][:20]:
                         st.text(e)
         else:
-            st.error("❌ 임포트 실패")
+            st.error("❌ インポート失敗")
             for e in result["errors"][:10]:
                 st.text(e)
 
     routes_data = routes_with_data()
     if routes_data:
-        st.caption(f"보유: {len(routes_data)}개 노선 / "
-                   f"{sum(r['flight_count'] for r in routes_data)}편")
+        st.caption(f"保有: {len(routes_data)}路線 / "
+                   f"{sum(r['flight_count'] for r in routes_data)}便")
 
-with st.sidebar.expander("🔧 데이터 관리"):
-    if st.button("DB 재시드 (공항·노선만)"):
+with st.sidebar.expander("🔧 データ管理"):
+    if st.button("DB再シード (空港・路線のみ)"):
         seed()
-        st.success("재시드 완료")
+        st.success("再シード完了")
         st.cache_resource.clear()
-    if st.button("운임 캐시 초기화"):
+    if st.button("運賃キャッシュ初期化"):
         with get_conn() as c:
             c.execute("DELETE FROM fare_cache WHERE source != 'seed'")
-        st.success("초기화됨")
-    if st.button("⚠️ 모든 항공편 삭제"):
+        st.success("初期化しました")
+    if st.button("⚠️ 全フライト削除"):
         with get_conn() as c:
             c.execute("DELETE FROM flights")
-        st.success("삭제됨")
+        st.success("削除しました")
 
 
-# ===== 메인 =====
+# ===== メイン =====
 st.title("✈️ JAL LSP Optimizer")
-st.caption("LSP 우선 / 체인 검색 / 가격은 참고용")
+st.caption("LSP優先 / チェーン検索 / 価格は参考用")
 
-tabs = st.tabs(["🔍 검색", "💰 운임", "📋 예약", "📊 캐시"])
+tabs = st.tabs(["🔍 検索", "💰 運賃", "📋 予約", "📊 キャッシュ"])
 
 
-# ===== Tab 1: 검색 =====
+# ===== Tab 1: 検索 =====
 with tabs[0]:
-    # 입력은 세로로 쌓아서 모바일 친화
     all_bases = get_base_airports()
     base_codes = [b["code"] for b in all_bases]
-    base_labels = {b["code"]: f"{b['code']} - {b['name_ko']}" for b in all_bases}
+    base_labels = {b["code"]: f"{b['code']} - {b['name_jp']}" for b in all_bases}
 
-    # 조건 1: 출발 베이스
+    # 条件 1: 出発ベース
     selected_bases = st.multiselect(
-        "① 출발 베이스 공항 (시작·종료점)",
+        "① 出発ベース空港 (出発・帰着地)",
         options=base_codes,
         default=["HND"],
         format_func=lambda c: base_labels.get(c, c),
-        help="루트가 시작·종료되는 공항. 복수 선택 가능.",
+        help="ルートの出発・帰着空港。複数選択可。",
     )
 
-    # 조건 2 & 3: 모든 공항 풀
+    # 条件 2 & 3: 全空港プール
     all_aps = get_all_airports()
     ap_codes = [a["code"] for a in all_aps]
-    ap_labels = {a["code"]: f"{a['code']} - {a['name_ko']}" for a in all_aps}
+    ap_labels = {a["code"]: f"{a['code']} - {a['name_jp']}" for a in all_aps}
 
     must_include = st.multiselect(
-        "② 반드시 포함할 공항 (선택)",
+        "② 必ず含む空港 (任意)",
         options=ap_codes,
         default=[],
         format_func=lambda c: ap_labels.get(c, c),
-        help="루트가 반드시 거쳐야 할 공항. 비워두면 무시됨. "
-             "예: OKA 선택 → 오키나와를 꼭 거치는 루트만 표시",
+        help="ルートが必ず経由する空港。空欄なら無視。"
+             "例: OKAを選択 → 沖縄を必ず経由するルートのみ表示",
     )
 
     allowed_airports = st.multiselect(
-        "③ 조합 공항 — 사용 가능 공항 풀 (선택)",
+        "③ 組合せ空港 — 使用可能空港プール (任意)",
         options=ap_codes,
         default=[],
         format_func=lambda c: ap_labels.get(c, c),
-        help="여기 선택한 공항들 사이에서만 비행. 비워두면 모든 공항 사용. "
-             "베이스 공항은 자동 포함. "
-             "예: HND, ITM, OKA만 선택 → 이 3개 공항 사이에서만 조합",
+        help="ここで選択した空港間でのみ飛行。空欄なら全空港使用可。"
+             "ベース空港は自動で含まれます。"
+             "例: HND, ITM, OKAのみ選択 → この3空港間のみで組合せ",
     )
 
     cdate1, cdate2 = st.columns(2)
     with cdate1:
-        start_date = st.date_input("시작일",
+        start_date = st.date_input("開始日",
                                    value=date.today() + timedelta(days=14))
     with cdate2:
-        end_date = st.date_input("종료일",
+        end_date = st.date_input("終了日",
                                  value=date.today() + timedelta(days=16))
 
     fare_class = st.selectbox(
-        "운임 클래스 (참고용)",
+        "運賃クラス (参考用)",
         options=list(FARE_CLASSES.keys()),
         format_func=lambda c: FARE_CLASSES[c]["label"],
         index=1,
     )
 
-    # 패턴 선택
+    # パターン選択
     cp1, cp2, cp3 = st.columns(3)
-    pattern_day = cp1.checkbox("당일", value=True)
-    pattern_1n = cp2.checkbox("1박2일", value=True)
-    pattern_2n = cp3.checkbox("2박3일", value=False)
+    pattern_day = cp1.checkbox("日帰り", value=True)
+    pattern_1n = cp2.checkbox("1泊2日", value=True)
+    pattern_2n = cp3.checkbox("2泊3日", value=False)
 
-    # 세그먼트 범위
-    seg_range = st.slider("세그먼트 수 범위", 2, 24, (4, 12),
-                          help="LSP 회수 채우려면 4 이상 권장. "
-                               "2박3일에 20세그 이상 가능 (검색시간 늘려야 함)")
+    # セグメント範囲
+    seg_range = st.slider("セグメント数の範囲", 2, 24, (4, 12),
+                          help="LSP回収には4以上推奨。"
+                               "2泊3日では20セグ以上も可能 (検索時間を増やす)")
     min_segments, max_segments = seg_range
 
     cn1, cn2 = st.columns(2)
-    top_n = cn1.slider("상위 N개", 5, 50, 15)
-    time_budget = cn2.slider("최대 검색시간(초)", 2, 60, 8,
-                              help="복잡한 검색(2박3일+많은 세그)은 30초+ 필요")
+    top_n = cn1.slider("上位N件", 5, 50, 15)
+    time_budget = cn2.slider("最大検索時間(秒)", 2, 60, 8,
+                              help="複雑な検索 (2泊3日+多セグメント) は30秒+必要")
 
     cd1, cd2 = st.columns(2)
-    diversify = cd1.checkbox("결과 다양화 (첫 도시별 분산)",
+    diversify = cd1.checkbox("結果の多様化 (初訪都市別に分散)",
                               value=True,
-                              help="같은 첫 도시로 시작하는 루트가 결과를 점령하지 않도록 분산")
-    max_per_first = cd2.slider("첫 도시별 최대 노출",
+                              help="同じ初訪都市で始まるルートが結果を占めないよう分散")
+    max_per_first = cd2.slider("初訪都市別の最大表示数",
                                  1, 5, 2,
-                                 help="다양화 ON일 때, 같은 첫 도시 시작 결과는 N개까지만 상위에 표시")
+                                 help="多様化ON時、同じ初訪都市のルートは上位N件まで")
 
-    # 검색 버튼
-    if st.button("🔍 루트 검색", type="primary", width='stretch'):
+    # 検索ボタン
+    if st.button("🔍 ルート検索", type="primary", width='stretch'):
         if not selected_bases:
-            st.error("출발 공항을 선택하세요.")
+            st.error("出発空港を選択してください。")
         elif end_date < start_date:
-            st.error("종료일이 시작일보다 빠릅니다.")
+            st.error("終了日が開始日より前です。")
         else:
-            with st.spinner("검색 중..."):
+            with st.spinner("検索中..."):
                 results = {}
-                # 빈 리스트는 None으로 (필터 미적용)
                 _must = must_include if must_include else None
                 _allowed = allowed_airports if allowed_airports else None
 
@@ -278,48 +274,47 @@ with tabs[0]:
                         allowed_airports=_allowed,
                     )
 
-            # 결과 표시
+            # 結果表示
+            pattern_jp = {"day": "日帰り", "1n2d": "1泊2日", "2n3d": "2泊3日"}
             for ptn, rts in results.items():
                 if not rts:
-                    st.info(f"{PATTERNS[ptn]['label']}: 결과 없음")
+                    st.info(f"{pattern_jp.get(ptn, ptn)}: 結果なし")
                     continue
 
-                st.subheader(f"📅 {PATTERNS[ptn]['label']} — {len(rts)}건")
+                st.subheader(f"📅 {pattern_jp.get(ptn, ptn)} — {len(rts)}件")
                 df = pd.DataFrame([route_to_dict(r) for r in rts])
 
-                # 모바일: 핵심 컬럼만 (날짜, 루트, 세그, 공항, LSP)
                 display = df[["date", "route", "segments", "airports",
                                "lsp", "fop", "miles"]].copy()
-                display.columns = ["날짜", "루트", "세그", "공항",
-                                    "LSP", "FOP", "마일"]
+                display.columns = ["日付", "ルート", "セグ", "空港数",
+                                    "LSP", "FOP", "マイル"]
                 st.dataframe(display, width='stretch', hide_index=True,
                              height=min(420, 50 + len(display) * 35))
 
-                st.markdown(f"**모든 루트 상세 ({len(rts)}건)**")
-                st.caption("각 루트를 펼쳐서 항공편·시각·JAL 링크 확인. "
-                           "가격은 참고용일 뿐 정확하지 않으니 JAL에서 직접 검색하세요.")
+                st.markdown(f"**全ルート詳細 ({len(rts)}件)**")
+                st.caption("各ルートを展開してフライト詳細・JALリンクを確認。"
+                           "価格は参考値で正確ではないため、JALで直接検索してください。")
                 for i, r in enumerate(rts):
                     route_path = " → ".join(
                         [r.segments[0].origin] +
                         [s.destination for s in r.segments]
                     ) if r.segments else ""
-                    # 긴 루트는 제목에서 잘라서 표시
                     route_short = (route_path[:80] + "..."
                                    if len(route_path) > 80 else route_path)
                     with st.expander(
                         f"#{i+1}  {r.segments[0].flight_date}  "
-                        f"세그{r.num_segments}/공항{r.num_airports}/LSP{r.lsp}  "
+                        f"セグ{r.num_segments}/空港{r.num_airports}/LSP{r.lsp}  "
                         f"| {route_short}"
                     ):
-                        st.markdown(f"**전체 루트**: {route_path}")
+                        st.markdown(f"**全ルート**: {route_path}")
                         seg_rows = []
                         for s in r.segments:
                             seg_rows.append({
-                                "편명": s.flight_no,
-                                "날짜": s.flight_date.isoformat(),
-                                "구간": f"{s.origin}→{s.destination}",
-                                "출발": s.dep_time,
-                                "도착": s.arr_time,
+                                "便名": s.flight_no,
+                                "日付": s.flight_date.isoformat(),
+                                "区間": f"{s.origin}→{s.destination}",
+                                "出発": s.dep_time,
+                                "到着": s.arr_time,
                                 "JAL": jal_search_url(s.origin, s.destination,
                                                        s.flight_date),
                                 "Google": google_flights_url(
@@ -337,93 +332,93 @@ with tabs[0]:
                             width='stretch', hide_index=True,
                         )
                         st.caption(
-                            f"참고가격(추정): ¥{r.price:,} / "
-                            f"FOP {r.fop} / 마일 {r.miles}"
+                            f"参考価格 (推定): ¥{r.price:,} / "
+                            f"FOP {r.fop} / マイル {r.miles}"
                         )
 
 
-# ===== Tab 2: 운임 입력 =====
+# ===== Tab 2: 運賃入力 =====
 with tabs[1]:
-    st.markdown("### 💰 운임 입력")
-    st.caption("JAL/Google에서 본 가격을 저장 → 다음 검색의 참고치로 사용")
+    st.markdown("### 💰 運賃入力")
+    st.caption("JAL/Googleで見た価格を保存 → 次回検索の参考値として使用")
 
     airports = get_all_airports()
     codes = [a["code"] for a in airports]
-    labels = {a["code"]: f"{a['code']} - {a['name_ko']}" for a in airports}
+    labels = {a["code"]: f"{a['code']} - {a['name_jp']}" for a in airports}
 
     cf1, cf2 = st.columns(2)
-    f_origin = cf1.selectbox("출발", codes,
+    f_origin = cf1.selectbox("出発", codes,
                               format_func=lambda c: labels[c],
                               key="fare_origin")
-    f_dest = cf2.selectbox("도착", codes,
+    f_dest = cf2.selectbox("到着", codes,
                             format_func=lambda c: labels[c],
                             index=1, key="fare_dest")
 
     cf3, cf4 = st.columns(2)
-    f_date = cf3.date_input("탑승일",
+    f_date = cf3.date_input("搭乗日",
                              value=date.today() + timedelta(days=14),
                              key="fare_date")
-    f_class = cf4.selectbox("운임", list(FARE_CLASSES.keys()),
+    f_class = cf4.selectbox("運賃", list(FARE_CLASSES.keys()),
                              format_func=lambda c: FARE_CLASSES[c]["label"],
                              key="fare_class_input")
 
-    f_price = st.number_input("가격 (엔)", min_value=0, step=100,
+    f_price = st.number_input("価格 (円)", min_value=0, step=100,
                                key="fare_price")
-    f_notes = st.text_input("메모", key="fare_notes")
+    f_notes = st.text_input("メモ", key="fare_notes")
 
-    if st.button("💾 저장", type="primary", width='stretch'):
+    if st.button("💾 保存", type="primary", width='stretch'):
         if f_price <= 0:
-            st.error("가격을 입력해주세요.")
+            st.error("価格を入力してください。")
         elif f_origin == f_dest:
-            st.error("출발지와 도착지가 같습니다.")
+            st.error("出発地と到着地が同じです。")
         else:
             add_fare(f_origin, f_dest, f_date.isoformat(),
                      f_class, int(f_price),
                      source="manual", confidence=2,
                      notes=f_notes or "")
-            st.success(f"✅ {f_origin}→{f_dest} ¥{f_price:,} 저장됨")
+            st.success(f"✅ {f_origin}→{f_dest} ¥{f_price:,} 保存しました")
 
 
-# ===== Tab 3: 예약 기록 =====
+# ===== Tab 3: 予約記録 =====
 with tabs[2]:
-    st.markdown("### 📋 예약 기록")
+    st.markdown("### 📋 予約記録")
 
     airports = get_all_airports()
     codes = [a["code"] for a in airports]
-    labels = {a["code"]: f"{a['code']} - {a['name_ko']}" for a in airports}
+    labels = {a["code"]: f"{a['code']} - {a['name_jp']}" for a in airports}
 
     cb1, cb2 = st.columns(2)
-    b_flight_no = cb1.text_input("편명", key="bk_flight")
+    b_flight_no = cb1.text_input("便名", key="bk_flight")
     b_pnr = cb2.text_input("PNR", key="bk_pnr")
 
     cb3, cb4 = st.columns(2)
-    b_origin = cb3.selectbox("출발", codes,
+    b_origin = cb3.selectbox("出発", codes,
                               format_func=lambda c: labels[c],
                               key="bk_origin")
-    b_dest = cb4.selectbox("도착", codes,
+    b_dest = cb4.selectbox("到着", codes,
                             format_func=lambda c: labels[c],
                             index=1, key="bk_dest")
 
     cb5, cb6 = st.columns(2)
-    b_date = cb5.date_input("탑승일",
+    b_date = cb5.date_input("搭乗日",
                              value=date.today() + timedelta(days=14),
                              key="bk_date")
-    b_class = cb6.selectbox("운임", list(FARE_CLASSES.keys()),
+    b_class = cb6.selectbox("運賃", list(FARE_CLASSES.keys()),
                              format_func=lambda c: FARE_CLASSES[c]["label"],
                              key="bk_class")
-    b_price = st.number_input("결제 (엔)", min_value=0, step=100, key="bk_price")
-    b_notes = st.text_input("메모", key="bk_notes")
+    b_price = st.number_input("支払額 (円)", min_value=0, step=100, key="bk_price")
+    b_notes = st.text_input("メモ", key="bk_notes")
 
-    if st.button("✅ 등록", type="primary", width='stretch'):
+    if st.button("✅ 登録", type="primary", width='stretch'):
         if not b_flight_no or b_price <= 0:
-            st.error("편명과 가격은 필수입니다.")
+            st.error("便名と価格は必須です。")
         else:
             add_booking(b_flight_no, b_origin, b_dest, b_date.isoformat(),
                         b_class, int(b_price), b_pnr or "", b_notes or "")
-            st.success(f"✅ 등록됨")
+            st.success(f"✅ 登録しました")
 
     st.markdown("---")
-    st.markdown("**최근 예약**")
+    st.markdown("**最近の予約**")
     with get_conn() as c:
         rows = c.execute(
             "SELECT * FROM bookings ORDER BY booked_at DESC LIMIT 30"
@@ -432,12 +427,12 @@ with tabs[2]:
         df_b = pd.DataFrame([dict(r) for r in rows])
         st.dataframe(df_b, width='stretch', hide_index=True)
     else:
-        st.info("등록된 예약 없음")
+        st.info("登録された予約なし")
 
 
-# ===== Tab 4: 캐시 현황 =====
+# ===== Tab 4: キャッシュ状況 =====
 with tabs[3]:
-    st.markdown("### 📊 캐시 현황")
+    st.markdown("### 📊 キャッシュ状況")
     with get_conn() as c:
         rows = c.execute("""
             SELECT origin, destination, fare_class,
@@ -455,8 +450,8 @@ with tabs[3]:
         df_c["avg_price"] = df_c["avg_price"].apply(lambda x: f"¥{int(x):,}")
         df_c["min_price"] = df_c["min_price"].apply(lambda x: f"¥{x:,}")
         df_c["max_price"] = df_c["max_price"].apply(lambda x: f"¥{x:,}")
-        df_c.columns = ["출발", "도착", "운임", "건수",
-                        "평균", "최저", "최고", "★최대"]
+        df_c.columns = ["出発", "到着", "運賃", "件数",
+                        "平均", "最低", "最高", "★最大"]
         st.dataframe(df_c, width='stretch', hide_index=True)
     else:
-        st.info("캐시 비어있음")
+        st.info("キャッシュは空です")
