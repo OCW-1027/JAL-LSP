@@ -23,6 +23,8 @@ from .rules import (LSP_PER_SEGMENT, fop_per_segment, safe_mct, PATTERNS)
 
 # 모듈 레벨 운임 조회 캐시 (한 번의 검색 동안만 유효)
 _FARE_LOOKUP_CACHE: dict = {}
+# 検索ごとの設定 (search_routes が設定)
+SEARCH_CFG = {"cabin": "Y", "objective": "lsp"}
 
 
 def _to_min(hhmm: str) -> int:
@@ -45,6 +47,7 @@ class Segment:
     flight_date: date
     miles: int
     flight_min: int
+    miles_est: bool = False
 
     @property
     def dep_min(self) -> int:
@@ -110,6 +113,7 @@ def _flight_to_segment(f: dict, flight_date: date) -> Segment:
         flight_date=flight_date,
         miles=f["miles"],
         flight_min=60,
+        miles_est=f.get("miles_est", False),
     )
 
 
@@ -123,31 +127,33 @@ def clear_fare_cache():
 
 def score_route(segments: list[Segment], fare_class: str = "Saver",
                 overnight_cities: list[str] = None) -> Route:
-    """LSP 우선 점수.
+    """目的別スコア.
 
-    score = LSP*1000 + airports*10 + miles/100
-    (가격은 점수에 영향 없음 — 참고용)
+    lsp   : LSP*1000 + 空港数*10 + マイル/100
+    fop   : FOP (そのまま) + 空港数
+    count : セグメント数*1000 - 総所要時間(分)/10  (短時間で回数を稼ぐ)
     """
     overnight_cities = overnight_cities or []
+    cabin = SEARCH_CFG.get("cabin", "Y")
+    objective = SEARCH_CFG.get("objective", "lsp")
     lsp = len(segments) * LSP_PER_SEGMENT
     miles = sum(s.miles for s in segments)
-    fop = sum(fop_per_segment(s.miles, fare_class) for s in segments)
-    total_price, conf = 0, 0
-
+    fop = sum(fop_per_segment(s.miles, fare_class, cabin) for s in segments)
     airports = set()
     for s in segments:
         airports.add(s.origin)
         airports.add(s.destination)
-
-    score = lsp * 1000 + len(airports) * 10 + miles / 100
-
-    return Route(
-        segments=segments,
-        overnight_cities=overnight_cities,
-        lsp=lsp, fop=fop, miles=miles,
-        price=total_price, fare_class=fare_class,
-        score=score, confidence=conf,
-    )
+    if objective == "fop":
+        score = fop + len(airports)
+    elif objective == "count":
+        first, last = segments[0], segments[-1]
+        total_min = (last.flight_date - first.flight_date).days * 1440 + (last.arr_min - first.dep_min)
+        score = len(segments) * 1000 - total_min / 10
+    else:
+        score = lsp * 1000 + len(airports) * 10 + miles / 100
+    return Route(segments=segments, overnight_cities=overnight_cities,
+                 lsp=lsp, fop=fop, miles=miles, price=0, fare_class=fare_class,
+                 score=score, confidence=0)
 
 
 # =====================================================================
@@ -491,6 +497,8 @@ def search_routes(bases: list[str], start_date: date, end_date: date,
                   max_per_first_dest: int = 2,
                   final_dests: Optional[list[str]] = None,
                   allowed_airports: Optional[list[str]] = None,
+                  cabin: str = "Y",
+                  objective: str = "lsp",
                   ) -> list[Route]:
     """기간 내 모든 출발일 검색.
 
@@ -507,6 +515,8 @@ def search_routes(bases: list[str], start_date: date, end_date: date,
     - 케이스 4 (③ 지정):     ③ 안의 모든 공항이 출발/도착 후보 (①② 무시)
     """
     clear_fare_cache()
+    SEARCH_CFG["cabin"] = cabin
+    SEARCH_CFG["objective"] = objective
 
     allowed_set: Optional[set[str]] = None
     effective_bases: list[str] = list(bases)

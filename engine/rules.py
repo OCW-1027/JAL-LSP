@@ -1,68 +1,72 @@
-"""JAL 규칙 및 상수.
+"""JAL ルール・定数 (FOP/LSP/MCT).
 
-- LSP: 적립 대상 운임 1탑승당 5포인트
-- FOP: 구간마일 × 적립률 × 2 + 운임 보너스
-- MCT: 동일공항 환승 최소시간
+FOP = 区間マイル × (運賃積算率 + 座席加算) × 2 (国内線) + 搭乗ボーナスFOP
+※ 数値は JAL 公式ページで随時確認のこと。変更はこのファイルだけで完結する。
 """
 
-# 동일공항 국내선 환승 최소연결시간 (분)
+# 同一空港乗継の最短時間 (分) + 安全バッファ
 MCT = {"HND": 30, "OKA": 30}
 DEFAULT_MCT = 20
-
-# 보안검색 마감 (출발 N분 전)
-SECURITY_DEADLINE_BEFORE = 20
-GATE_DEADLINE_BEFORE = 10
-BAGGAGE_CHECK_BEFORE = 30
-
-# 안전 버퍼 (분) - 공식 MCT에 추가로 더해서 권장 환승시간 산출
 SAFETY_BUFFER = 10
 
 LSP_PER_SEGMENT = 5
+DOMESTIC_FOP_MULTIPLIER = 2
 
-# 운임 클래스: 마일 적립률, FOP 보너스
+# 運賃種別: 積算率, 搭乗ボーナスFOP
 FARE_CLASSES = {
-    "Flex":         {"mile_rate": 1.00, "fop_bonus": 400, "label": "Flex (변경가)"},
-    "Saver":        {"mile_rate": 0.75, "fop_bonus": 200, "label": "Saver"},
-    "SpecialSaver": {"mile_rate": 0.75, "fop_bonus": 200, "label": "Special Saver"},
-    "Promo":        {"mile_rate": 0.50, "fop_bonus": 0,   "label": "Promotion"},
+    "Flex":         {"mile_rate": 1.00, "fop_bonus": 400, "label": "フレックス (100%・+400)"},
+    "CardDiscount": {"mile_rate": 1.00, "fop_bonus": 400, "label": "JALカード割引 (100%・+400)"},
+    "Saver":        {"mile_rate": 0.75, "fop_bonus": 200, "label": "セイバー (75%・+200)"},
+    "SpecialSaver": {"mile_rate": 0.75, "fop_bonus": 200, "label": "スペシャルセイバー (75%・+200)"},
+    "Shareholder":  {"mile_rate": 0.75, "fop_bonus": 200, "label": "株主割引 (75%・+200)"},
+    "Promo":        {"mile_rate": 0.50, "fop_bonus": 0,   "label": "プロモーション (50%・+0)"},
 }
 
-# 패턴별 시간창
+# 座席クラス: 積算率への加算
+CABIN_CLASSES = {
+    "Y": {"add_rate": 0.00, "label": "普通席"},
+    "J": {"add_rate": 0.10, "label": "クラスJ (+10%)"},
+    "F": {"add_rate": 0.50, "label": "ファーストクラス (+50%)"},
+}
+
+# FLY ON ステイタス基準 (暦年)
+STATUS_THRESHOLDS = [
+    {"name": "クリスタル",       "fop": 30000,  "count": 30,  "count_fop": 10000},
+    {"name": "サファイア",       "fop": 50000,  "count": 50,  "count_fop": 15000},
+    {"name": "JGCプレミア",      "fop": 80000,  "count": 80,  "count_fop": 25000},
+    {"name": "ダイヤモンド",     "fop": 100000, "count": 120, "count_fop": 35000},
+    {"name": "ダイヤモンドMetal", "fop": 150000, "count": 180, "count_fop": 50000},
+]
+LSP_MILESTONES = [
+    {"name": "JGC (Three Star)", "lsp": 1500},
+    {"name": "Four Star", "lsp": 3000},
+    {"name": "Five Star", "lsp": 6000},
+]
+
 PATTERNS = {
-    "day":  {"days": 1, "label": "당일치기",     "start_hour": 6, "end_hour": 22},
-    "1n2d": {"days": 2, "label": "1박 2일",     "start_hour": 6, "end_hour": 22},
-    "2n3d": {"days": 3, "label": "2박 3일",     "start_hour": 6, "end_hour": 22},
-}
-
-# 외박지 평균 1박 비용 (대도시 비즈니스호텔 기준, 만엔 단위 미사용)
-OVERNIGHT_COST_DEFAULT = 12000  # 엔
-OVERNIGHT_COST_BY_CITY = {
-    "OKA": 13000, "ISG": 18000, "MMY": 18000,
-    "ITM": 14000, "KIX": 14000, "NGO": 12000,
-    "FUK": 13000, "CTS": 12000, "HIJ": 11000,
-    "OKJ": 10000, "KMQ": 11000, "TOY": 10000,
-    "AKT": 10000, "AOJ": 10000, "MYJ": 10000,
-    "TAK": 10000, "KOJ": 11000, "KMI": 10000,
-    "OIT": 10000, "NGS": 11000, "MMB": 10000,
-    "HKD": 12000,
+    "day":  {"days": 1, "label": "日帰り", "start_hour": 6, "end_hour": 22},
+    "1n2d": {"days": 2, "label": "1泊2日", "start_hour": 6, "end_hour": 22},
+    "2n3d": {"days": 3, "label": "2泊3日", "start_hour": 6, "end_hour": 22},
 }
 
 
 def get_mct(airport: str) -> int:
-    """동일공항 환승 최소연결시간 (분)."""
     return MCT.get(airport, DEFAULT_MCT)
 
 
 def safe_mct(airport: str) -> int:
-    """공식 MCT + 안전 버퍼."""
     return get_mct(airport) + SAFETY_BUFFER
 
 
-def fop_per_segment(miles: int, fare_class: str) -> int:
-    """1세그먼트 FOP 추정 (구간마일 × 적립률 × 2 + 보너스)."""
-    fc = FARE_CLASSES[fare_class]
-    return int(miles * fc["mile_rate"] * 2 + fc["fop_bonus"])
+def accrual_rate(fare_class: str, cabin: str = "Y") -> float:
+    return FARE_CLASSES[fare_class]["mile_rate"] + CABIN_CLASSES[cabin]["add_rate"]
 
 
-def overnight_cost(airport: str) -> int:
-    return OVERNIGHT_COST_BY_CITY.get(airport, OVERNIGHT_COST_DEFAULT)
+def fop_per_segment(miles: int, fare_class: str, cabin: str = "Y") -> int:
+    """1セグメントの FOP."""
+    return int(miles * accrual_rate(fare_class, cabin) * DOMESTIC_FOP_MULTIPLIER
+               + FARE_CLASSES[fare_class]["fop_bonus"])
+
+
+def flight_miles(miles: int, fare_class: str, cabin: str = "Y") -> int:
+    return int(miles * accrual_rate(fare_class, cabin))
