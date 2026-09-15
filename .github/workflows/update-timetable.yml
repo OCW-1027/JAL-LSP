@@ -7,7 +7,7 @@ on:
     inputs:
       days:
         description: "取得日数"
-        default: "60"
+        default: "200"
 
 permissions:
   contents: write
