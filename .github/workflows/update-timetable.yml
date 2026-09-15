@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Fetch JAL timetable from ekitan
-        run: python etl/fetch_ekitan.py --days ${{ github.event.inputs.days || 60 }} --workers 4 --delay 1.0
+        run: python etl/fetch_ekitan.py --days ${{ github.event.inputs.days || 200 }} --workers 4 --delay 1.0
       - name: Commit data
         run: |
           git config user.name "timetable-bot"
