@@ -11,6 +11,7 @@ from engine.optimizer import search_routes, route_to_dict
 from engine.rules import (FARE_CLASSES, CABIN_CLASSES, STATUS_THRESHOLDS, LSP_MILESTONES,
                           fop_per_segment, LSP_PER_SEGMENT)
 from engine.miles import route_miles
+from engine.intl import INTL_AIRPORTS, GATEWAYS, INTL_CLASSES, FOP_RATE, intl_miles, intl_fop
 
 st.set_page_config(page_title="JAL LSP Optimizer", page_icon="✈️",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -48,7 +49,7 @@ with st.sidebar:
 st.title("✈️ JAL LSP Optimizer")
 st.caption("LSP最大化のためのフライト組合せ検索 ― 運賃は扱いません (JALで直接確認)")
 
-tab_search, tab_plan, tab_help = st.tabs(["🔍 検索", "📈 年間プラン", "📖 使い方"])
+tab_search, tab_plan, tab_table, tab_help = st.tabs(["🔍 検索", "📈 年間プラン", "📋 路線別FOP・マイル表", "📖 使い方"])
 
 with tab_search:
     with st.expander("📖 はじめての方へ", expanded=False):
@@ -227,6 +228,66 @@ with tab_plan:
     rdf = pd.DataFrame([{"路線": f"{a}-{b}", "区間マイル": f"{m}{' ※推定' if e else ''}",
                          "FOP/セグ": fop_per_segment(m, plan_fare, plan_cabin)} for a, b, m, e in rk[:40]])
     st.dataframe(rdf, width='stretch', hide_index=True, height=400)
+
+with tab_table:
+    st.markdown("### 📋 路線別 FOP・マイル表")
+    st.caption("旅行計画用。国内線は現在データの全路線、国際線は JAL 主要就航地。運賃・座席を変えると FOP が再計算されます")
+
+    # ---------- 国内線 ----------
+    st.markdown("#### 🇯🇵 国内線 (全路線)")
+    from engine.data import _load_all
+    pairs = {}
+    for d in _load_all().values():
+        for lst in d.values():
+            for f in lst:
+                a, b = sorted((f["origin"], f["destination"]))
+                pairs[(a, b)] = (f["miles"], f["miles_est"])
+    t1, t2, t3 = st.columns(3)
+    dom_fare = t1.selectbox("運賃", list(FARE_CLASSES), index=2, format_func=lambda k: FARE_CLASSES[k]["label"], key="tf")
+    dom_cabin = t2.selectbox("座席", list(CABIN_CLASSES), index=0, format_func=lambda k: CABIN_CLASSES[k]["label"], key="tc")
+    dom_ap = t3.selectbox("空港で絞り込み", ["(全て)"] + airports(), format_func=lambda c: c if c == "(全て)" else airport_label(c), key="ta")
+    rows = []
+    for (a, b), (m, e) in pairs.items():
+        if dom_ap != "(全て)" and dom_ap not in (a, b):
+            continue
+        fop1 = fop_per_segment(m, dom_fare, dom_cabin)
+        rows.append({"路線": f"{a} - {b}", "区間": f"{airport_label(a).split(' - ')[1]} - {airport_label(b).split(' - ')[1]}",
+                     "区間マイル": m, "推定": "※" if e else "", "LSP/セグ": LSP_PER_SEGMENT,
+                     "FOP/セグ": fop1, "往復FOP": fop1 * 2, "往復LSP": LSP_PER_SEGMENT * 2,
+                     "フレックス普通席": fop_per_segment(m, "Flex", "Y"), "セイバー普通席": fop_per_segment(m, "Saver", "Y"),
+                     "セイバーJ": fop_per_segment(m, "Saver", "J"), "フレックスJ": fop_per_segment(m, "Flex", "J"),
+                     "ファースト(Flex)": fop_per_segment(m, "Flex", "F")})
+    ddf = pd.DataFrame(rows).sort_values("FOP/セグ", ascending=False)
+    st.dataframe(ddf, width='stretch', hide_index=True, height=480)
+    st.download_button("国内線 CSV ダウンロード", ddf.to_csv(index=False).encode("utf-8-sig"),
+                       "jal_domestic_fop_table.csv", "text/csv")
+    st.caption(f"{len(ddf)} 路線。※=区間マイル推定 (FDA/AMX コードシェア等)。FOP = 区間マイル × 積算率 × 2 + 搭乗ボーナス")
+
+    # ---------- 国際線 ----------
+    st.markdown("#### 🌏 国際線 (JAL 主要就航地)")
+    st.caption("FOP = 区間マイル × 予約クラス積算率 × 換算率 (アジア・オセアニア 1.5 / その他 1.0) + 搭乗ボーナス。"
+               "区間マイルは大圏距離からの推定 (±3%程度)。data/intl_routes.csv で公式値に上書き可")
+    i1, i2 = st.columns(2)
+    gw = i1.selectbox("日本側の空港", list(GATEWAYS), index=0, key="igw")
+    icls = i2.selectbox("予約クラス", list(INTL_CLASSES), index=3, key="icls")
+    irows = []
+    for code, (name, _, _, region) in INTL_AIRPORTS.items():
+        m, est = intl_miles(gw, code)
+        f1 = intl_fop(m, region, icls)
+        irows.append({"路線": f"{gw} - {code}", "都市": name, "地域": "アジア・オセアニア" if region == "asia" else "その他",
+                      "換算率": FOP_RATE[region], "区間マイル": m, "推定": "※" if est else "",
+                      "FOP/片道": f1, "FOP/往復": f1 * 2, "LSP/往復": 10,
+                      "ビジネス(J)往復": intl_fop(m, region, "J/C/D/X/I (ビジネス)") * 2,
+                      "PE(R)往復": intl_fop(m, region, "W/R/E (プレミアムエコノミー)") * 2,
+                      "Y/B往復": intl_fop(m, region, "Y/B (エコノミー正規)") * 2,
+                      "H/K/M往復": intl_fop(m, region, "H/K/M (エコノミー割引)") * 2,
+                      "L/V/S往復": intl_fop(m, region, "L/V/S (エコノミー割引)") * 2})
+    idf = pd.DataFrame(irows).sort_values("FOP/片道", ascending=False)
+    st.dataframe(idf, width='stretch', hide_index=True, height=480)
+    st.download_button("国際線 CSV ダウンロード", idf.to_csv(index=False).encode("utf-8-sig"),
+                       "jal_intl_fop_table.csv", "text/csv")
+    st.info("国際線航空券に含まれる日本国内区間は積算率100%・搭乗ボーナス400 (国内線換算2倍) で計算されるため、"
+            "例: OKA→HND→SIN の OKA-HND 区間は国内線より有利になることがあります。")
 
 with tab_help:
     st.markdown("""
