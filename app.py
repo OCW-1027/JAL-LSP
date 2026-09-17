@@ -71,17 +71,39 @@ def apply_preset(name: str):
                              "allowed": p["allowed"], "stay": p["stay"], "obj": p["obj"], "seg": p["seg"]})
 
 
-# ===== ヘッダー =====
-h1, h2 = st.columns([3, 1])
-with h1:
-    st.markdown(f"## 🛫 {APP_NAME} &nbsp;<span style='font-size:0.55em;padding:2px 10px;border:1px solid #999;border-radius:999px;color:#666;vertical-align:middle'>非公式</span>",
-                unsafe_allow_html=True)
-    st.caption("日付を入れるだけで、LSP・FOPが貯まる乗継ルートを提案 ― 運賃は扱いません（JALで直接確認）")
-with h2:
-    if dates:
-        st.caption(f"時刻表: {dates[0]} 〜 {dates[-1]}  \n更新 {meta.get('fetched_at', '?')}・{meta.get('flights', 0):,}便")
+# ===== ヘッダー（モバイル最適化） =====
+st.markdown("""<style>
+header[data-testid="stHeader"]{display:none;}
+[data-testid="stToolbar"],[data-testid="stDecoration"],.stAppDeployButton{display:none;}
+#MainMenu{visibility:hidden;} footer{visibility:hidden;}
+.block-container{padding-top:1rem;padding-bottom:2rem;max-width:960px;}
+.app-title{font-size:1.5rem;font-weight:700;line-height:1.25;margin:0;white-space:nowrap;}
+.app-badge{font-size:.68rem;padding:1px 8px;border:1px solid #9a9a9a;border-radius:999px;color:#666;vertical-align:middle;margin-left:6px;font-weight:500;}
+.app-sub{color:#555;font-size:.85rem;margin:4px 0 0 0;}
+.app-meta{color:#888;font-size:.72rem;margin:2px 0 6px 0;}
+.stTabs [data-baseweb="tab-list"]{gap:2px;}
+.stTabs [data-baseweb="tab"]{padding-left:8px;padding-right:8px;}
+.kpi{display:flex;gap:8px;margin:6px 0 4px 0;}
+.kpi div{flex:1;border-radius:10px;padding:8px 10px;}
+.kpi .l{font-size:.7rem;} .kpi .v{font-size:1.35rem;font-weight:700;line-height:1.1;}
+.kpi .lsp{background:#e6f2f3;color:#0a4f56;} .kpi .fop{background:#fbf1e3;color:#8a4a08;} .kpi .mi{background:#f1f0ec;color:#4b5563;}
+.card-top{display:flex;align-items:center;gap:10px;font-size:.8rem;color:#666;}
+.reco{background:#0f6e78;color:#fff;padding:2px 10px;border-radius:6px;font-size:.75rem;font-weight:700;}
+.rank{font-weight:700;color:#333;}
+@media (max-width:640px){
+  .app-title{font-size:1.25rem;}
+  .stTabs [data-baseweb="tab"]{padding-left:6px;padding-right:6px;font-size:.85rem;}
+  .kpi .v{font-size:1.2rem;}
+}
+</style>""", unsafe_allow_html=True)
 
-tab_search, tab_plan, tab_table, tab_help = st.tabs(["🔍 検索", "📈 年間プラン", "📋 路線別FOP・マイル表", "📖 使い方"])
+meta_line = (f"時刻表 {dates[0]} 〜 {dates[-1]} ・ 更新 {meta.get('fetched_at', '?')} ・ {meta.get('flights', 0):,}便"
+             if dates else "時刻表データ未取得")
+st.markdown(f"""<p class="app-title">🛫 {APP_NAME}<span class="app-badge">非公式</span></p>
+<p class="app-sub">日付を入れるだけで、LSP・FOPが貯まる乗継ルートを提案。運賃は扱いません（JALで直接確認）</p>
+<p class="app-meta">{meta_line}</p>""", unsafe_allow_html=True)
+
+tab_search, tab_plan, tab_table, tab_help = st.tabs(["🔍 検索", "📈 プラン", "📋 路線表", "📖 使い方"])
 
 # ===== 検索 =====
 with tab_search:
@@ -175,17 +197,12 @@ with tab_search:
                 first, last = r.segments[0], r.segments[-1]
                 names_path = " → ".join([NAMES.get(first.origin, first.origin)] + [NAMES.get(s.destination, s.destination) for s in r.segments])
                 with st.container(border=True):
-                    top = st.columns([1, 3])
-                    if i == 0:
-                        top[0].markdown("<span style='background:#0f6e78;color:#fff;padding:2px 10px;border-radius:6px;font-size:0.8em;font-weight:700'>おすすめ</span>", unsafe_allow_html=True)
-                    else:
-                        top[0].markdown(f"**#{i+1}**")
-                    top[1].caption(f"{r.num_segments}セグ ・ {r.num_airports}空港 ・ {first.dep_time}〜{last.arr_time}"
-                                   + (f" ・ {first.flight_date} 発" if ctx.get('stay') != 'day' or len(set(s.flight_date for s in r.segments)) > 1 else ""))
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("LSP", r.lsp)
-                    m2.metric("FOP", f"{r.fop:,}")
-                    m3.metric("マイル", f"{r.miles:,}")
+                    tag = '<span class="reco">おすすめ</span>' if i == 0 else f'<span class="rank">#{i+1}</span>'
+                    date_note = f" ・ {first.flight_date} 発" if len(set(s.flight_date for s in r.segments)) > 1 or ctx.get('stay') != 'day' else ""
+                    st.markdown(f"""<div class="card-top">{tag}<span>{r.num_segments}セグ ・ {r.num_airports}空港 ・ {first.dep_time}〜{last.arr_time}{date_note}</span></div>
+<div class="kpi"><div class="lsp"><div class="l">LSP</div><div class="v">{r.lsp}</div></div>
+<div class="fop"><div class="l">FOP</div><div class="v">{r.fop:,}</div></div>
+<div class="mi"><div class="l">マイル</div><div class="v">{r.miles:,}</div></div></div>""", unsafe_allow_html=True)
                     st.markdown(f"**{names_path}**")
                     with st.expander("区間の詳細・JALで確認"):
                         rows = [{"便名": s.flight_no, "日付": s.flight_date.isoformat(),
