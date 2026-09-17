@@ -1,4 +1,4 @@
-"""JAL LSP Optimizer v2 — スケジュール組合せ検索 (Streamlit)
+"""修行ルート検索 for JAL（非公式） — Streamlit
 
 データ: data/flights_by_date.csv (駅探 JAL時刻表を GitHub Actions で週次自動取得)
 """
@@ -13,145 +13,197 @@ from engine.rules import (FARE_CLASSES, CABIN_CLASSES, STATUS_THRESHOLDS, LSP_MI
 from engine.miles import route_miles
 from engine.intl import INTL_AIRPORTS, GATEWAYS, INTL_CLASSES, FOP_RATE, intl_miles, intl_fop
 
-st.set_page_config(page_title="JAL LSP Optimizer", page_icon="✈️",
-                   layout="wide", initial_sidebar_state="collapsed")
+APP_NAME = "修行ルート検索 for JAL"
+st.set_page_config(page_title=APP_NAME, page_icon="🛫", layout="wide", initial_sidebar_state="collapsed")
 
 meta = load_meta()
 dates = available_dates()
 HUBS = ["HND", "ITM", "KIX", "NGO", "CTS", "FUK", "OKA"]
+NAMES = meta.get("airport_names", {})
+MAX_BUDGET = 15  # 共有サーバー保護のため検索時間上限
+
+
+def city(code: str) -> str:
+    return f"{NAMES.get(code, code)} ({code})"
 
 
 def jal_url(o, d, dt: date) -> str:
-    return (f"https://www.jal.co.jp/jp/ja/dom/booking/?dep={o}&arr={d}"
-            f"&date={dt.strftime('%Y%m%d')}")
+    return f"https://www.jal.co.jp/jp/ja/dom/booking/?dep={o}&arr={d}&date={dt.strftime('%Y%m%d')}"
 
 
 def google_url(o, d, dt: date) -> str:
     return f"https://www.google.com/travel/flights?q=Flights%20from%20{o}%20to%20{d}%20on%20{dt.isoformat()}"
 
 
-# ===== サイドバー: データ状態 =====
-with st.sidebar:
-    st.title("📦 データ")
-    if dates:
-        st.markdown(f"**取得日**: {meta.get('fetched_at', '?')}  \n"
-                    f"**カバー期間**: {dates[0]} 〜 {dates[-1]}  \n"
-                    f"**便数**: {meta.get('flights', 0):,} / **空港**: {meta.get('airports', 0)}")
-        st.caption("出典: 駅探 JAL時刻表 (週1回 GitHub Actions で自動更新)")
-    else:
-        st.error("データ未取得。`python etl/fetch_ekitan.py` を実行するか、"
-                 "GitHub Actions の update-timetable を手動実行してください。")
-    if st.button("再読込"):
-        reload()
-        st.rerun()
+@st.cache_data(ttl=3600, max_entries=300, show_spinner=False)
+def cached_search(bases, start, end, pattern, fare, seg_min, seg_max, top_n, budget,
+                  diversify, max_per, finals, allowed, cabin, objective):
+    return search_routes(list(bases), start, end, pattern, fare,
+                         min_segments=seg_min, max_segments=seg_max, top_n=top_n,
+                         time_budget_sec=float(budget), diversify=diversify,
+                         max_per_first_dest=max_per, final_dests=list(finals) or None,
+                         allowed_airports=list(allowed) or None, cabin=cabin, objective=objective)
 
-# ===== メイン =====
-st.title("✈️ JAL LSP Optimizer")
-st.caption("LSP最大化のためのフライト組合せ検索 ― 運賃は扱いません (JALで直接確認)")
+
+def choice(label, options, fmt, key, default=None, help=None):
+    """segmented_control があれば使い、無ければ radio."""
+    try:
+        kw = {} if key in st.session_state else {"default": default}
+        v = st.segmented_control(label, options, format_func=fmt, key=key, help=help, **kw)
+        return v if v is not None else default
+    except AttributeError:
+        idx = options.index(default) if default in options else 0
+        return st.radio(label, options, format_func=fmt, key=key, index=idx, horizontal=True, help=help)
+
+
+# ===== プリセット =====
+PRESETS = {
+    "沖縄タッチ":   {"desc": "HND-OKA 往復 ×2", "dep": "HND", "finals": ["HND"], "allowed": ["HND", "OKA"], "stay": "day", "obj": "fop", "seg": (4, 6)},
+    "離島周遊":     {"desc": "那覇-石垣-宮古", "dep": "OKA", "finals": ["OKA"], "allowed": ["OKA", "ISG", "MMY", "OGN"], "stay": "day", "obj": "lsp", "seg": (4, 10)},
+    "九州短距離":   {"desc": "福岡-宮崎-松山", "dep": "FUK", "finals": [], "allowed": ["FUK", "KMI", "MYJ", "KMJ", "KOJ", "OIT", "NGS"], "stay": "day", "obj": "lsp", "seg": (4, 10)},
+    "日帰り最大":   {"desc": "8セグ = LSP 40", "dep": "HND", "finals": ["HND"], "allowed": [], "stay": "day", "obj": "lsp", "seg": (6, 10)},
+}
+
+
+def apply_preset(name: str):
+    p = PRESETS[name]
+    st.session_state.update({"dep": p["dep"], "bases_extra": [], "finals": p["finals"],
+                             "allowed": p["allowed"], "stay": p["stay"], "obj": p["obj"], "seg": p["seg"]})
+
+
+# ===== ヘッダー =====
+h1, h2 = st.columns([3, 1])
+with h1:
+    st.markdown(f"## 🛫 {APP_NAME} &nbsp;<span style='font-size:0.55em;padding:2px 10px;border:1px solid #999;border-radius:999px;color:#666;vertical-align:middle'>非公式</span>",
+                unsafe_allow_html=True)
+    st.caption("日付を入れるだけで、LSP・FOPが貯まる乗継ルートを提案 ― 運賃は扱いません（JALで直接確認）")
+with h2:
+    if dates:
+        st.caption(f"時刻表: {dates[0]} 〜 {dates[-1]}  \n更新 {meta.get('fetched_at', '?')}・{meta.get('flights', 0):,}便")
 
 tab_search, tab_plan, tab_table, tab_help = st.tabs(["🔍 検索", "📈 年間プラン", "📋 路線別FOP・マイル表", "📖 使い方"])
 
+# ===== 検索 =====
 with tab_search:
-    with st.expander("📖 はじめての方へ", expanded=False):
-        st.markdown("""
-- 🎯 **目的**: 指定日に組める JAL国内線の乗継ルートを自動探索し、**LSP (1搭乗=5pt)** が多い順に提示
-- 📅 **データは日付ごとの実運航スケジュール** (曜日運航・運休を反映)。カバー期間外の日付は検索できません
-- 💴 **運賃は表示しません** — 残席で日々変動するため無意味。各便の JAL リンクから直接確認してください
-- ✅ 予約前に必ず JAL 公式で運航・乗継可否をご確認ください
-""")
-
     if not dates:
+        st.error("時刻表データがありません。GitHub Actions の update-timetable を実行してください。")
         st.stop()
     dmin, dmax = date.fromisoformat(dates[0]), date.fromisoformat(dates[-1])
     ap_codes = airports()
-    hub_codes = [c for c in HUBS if c in ap_codes]
+    st.session_state.setdefault("dep", "HND" if "HND" in ap_codes else ap_codes[0])
+    st.session_state.setdefault("stay", "day")
+    st.session_state.setdefault("obj", "lsp")
+    st.session_state.setdefault("seg", (4, 10))
 
-    c1, c2 = st.columns(2)
-    bases = c1.multiselect("① 出発空港", ap_codes, default=["HND"] if "HND" in ap_codes else [],
-                           format_func=airport_label,
-                           help="ルートの出発点。③を指定した場合は無視されます")
-    finals = c2.multiselect("② 最終到着空港 (任意)", ap_codes, default=[], format_func=airport_label,
-                            help="空欄=任意で終了。出発と同じ空港=往復。違う空港=片道")
-    allowed = st.multiselect("③ 組合せ空港 — 使用可能空港プール (任意)", ap_codes, default=[],
-                             format_func=airport_label,
-                             help="指定するとこの空港間のみで組合せ (①②は無視)。例: HND, ITM, OKA")
-    if st.button("主要空港をセット", help="HND/ITM/KIX/NGO/CTS/FUK/OKA を③に入れる"):
-        st.session_state["_allowed_preset"] = hub_codes
-        st.rerun()
+    # --- かんたん検索 ---
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1.2, 1, 0.8])
+        dep = c1.selectbox("出発空港", ap_codes, format_func=city, key="dep")
+        default_day = min(max(dmin, date.today() + timedelta(days=1)), dmax)
+        day = c2.date_input("日付", value=default_day, min_value=dmin, max_value=dmax, key="day")
+        stay = c3.selectbox("滞在", ["day", "1n2d", "2n3d"], key="stay",
+                            format_func=lambda k: {"day": "日帰り", "1n2d": "1泊2日", "2n3d": "2泊3日"}[k])
+        obj = choice("なにを増やす？", ["lsp", "fop", "count"],
+                     lambda k: {"lsp": "LSP（搭乗回数）", "fop": "FOP（年間ステイタス）", "count": "回数（短時間で）"}[k],
+                     key="obj", default=st.session_state["obj"])
+        go = st.button("🔍 ルートを探す", type="primary", width='stretch')
 
-    d1, d2 = st.columns(2)
-    default_start = max(dmin, date.today() + timedelta(days=1))
-    start_date = d1.date_input("開始日", value=min(default_start, dmax), min_value=dmin, max_value=dmax)
-    end_date = d2.date_input("終了日", value=min(start_date + timedelta(days=2), dmax),
-                             min_value=dmin, max_value=dmax)
+        with st.expander("詳細設定（到着空港・使う空港・運賃・座席・セグメント数）"):
+            a1, a2 = st.columns(2)
+            bases_extra = a1.multiselect("出発空港を追加", [c for c in ap_codes if c != dep], format_func=city, key="bases_extra")
+            finals = a2.multiselect("最終到着空港（空欄=任意／出発と同じ=往復）", ap_codes, format_func=city, key="finals")
+            allowed = st.multiselect("使う空港を限定（指定するとこの空港間のみ。出発・到着の指定は無視）",
+                                     ap_codes, format_func=city, key="allowed")
+            b1, b2, b3 = st.columns(3)
+            end_day = b1.date_input("終了日（複数日を一括検索）", value=day, min_value=dmin, max_value=dmax, key="end_day")
+            fare = b2.selectbox("運賃（FOP計算用）", list(FARE_CLASSES), index=2, format_func=lambda k: FARE_CLASSES[k]["label"], key="fare")
+            cabin = b3.selectbox("座席（FOP計算用）", list(CABIN_CLASSES), index=0, format_func=lambda k: CABIN_CLASSES[k]["label"], key="cabin")
+            seg_min, seg_max = st.slider("セグメント数の範囲", 2, 24, key="seg")
+            d1, d2, d3 = st.columns(3)
+            top_n = d1.slider("表示件数", 5, 30, 12, key="top_n")
+            budget = d2.slider("最大検索時間（秒）", 2, MAX_BUDGET, 6, key="budget")
+            max_per = d3.slider("同じ組合せの最大表示数", 1, 5, 2, key="max_per")
+            diversify = st.checkbox("結果を多様化する", True, key="diversify")
 
-    o1, o2, o3 = st.columns(3)
-    objective = o1.radio("目的", ["lsp", "fop", "count"], horizontal=True,
-                         format_func=lambda k: {"lsp": "LSP優先", "fop": "FOP優先", "count": "回数優先"}[k],
-                         help="LSP: 搭乗回数×5を最大化 / FOP: 年間ステイタス用ポイントを最大化 (長距離が有利) / 回数: 短時間で搭乗回数")
-    fare = o2.selectbox("運賃 (FOP計算用)", list(FARE_CLASSES), index=2, format_func=lambda k: FARE_CLASSES[k]["label"])
-    cabin = o3.selectbox("座席 (FOP計算用)", list(CABIN_CLASSES), index=0, format_func=lambda k: CABIN_CLASSES[k]["label"])
+    st.markdown("**よく使う修行パターン**（タップで条件をセット）")
+    pcols = st.columns(4)
+    for col, (name, p) in zip(pcols, PRESETS.items()):
+        col.button(f"{name}\n\n{p['desc']}", key=f"preset_{name}", on_click=apply_preset, args=(name,), width='stretch')
 
-    p1, p2, p3 = st.columns(3)
-    pat_day = p1.checkbox("日帰り", True)
-    pat_1n = p2.checkbox("1泊2日", True)
-    pat_2n = p3.checkbox("2泊3日", False)
+    # --- 検索実行 ---
+    if go:
+        bases = [dep] + [b for b in bases_extra if b != dep]
+        end_day = max(end_day, day)
+        if end_day < day:
+            end_day = day
+        with st.spinner("検索中…"):
+            results = cached_search(tuple(bases), day, end_day, stay, fare, seg_min, seg_max, top_n, budget,
+                                    diversify, max_per, tuple(finals), tuple(allowed), cabin, obj)
+        st.session_state["results"] = results
+        st.session_state["results_ctx"] = dict(dep=dep, day=day, stay=stay, obj=obj, fare=fare, cabin=cabin)
 
-    seg_min, seg_max = st.slider("セグメント数の範囲", 2, 24, (4, 12))
-    s1, s2 = st.columns(2)
-    top_n = s1.slider("表示件数", 5, 50, 15)
-    budget = s2.slider("最大検索時間(秒)", 2, 60, 8)
-    v1, v2 = st.columns(2)
-    diversify = v1.checkbox("結果の多様化", True, help="同じ初訪都市・終点の組合せに偏らないよう分散")
-    max_per = v2.slider("同一組合せの最大表示数", 1, 5, 2)
-
-    if st.button("🔍 ルート検索", type="primary", width='stretch'):
-        if not bases and not allowed:
-            st.error("①出発空港 または ③組合せ空港 のいずれかを選択してください。")
-        elif end_date < start_date:
-            st.error("終了日が開始日より前です。")
+    results = st.session_state.get("results")
+    ctx = st.session_state.get("results_ctx", {})
+    if results is not None:
+        stay_jp = {"day": "日帰り", "1n2d": "1泊2日", "2n3d": "2泊3日"}
+        obj_jp = {"lsp": "LSP優先", "fop": "FOP優先", "count": "回数優先"}
+        st.markdown("---")
+        if not results:
+            st.info("条件に合うルートが見つかりませんでした。セグメント数の範囲を広げるか、検索時間を増やしてみてください。")
         else:
-            patterns = [k for k, on in (("day", pat_day), ("1n2d", pat_1n), ("2n3d", pat_2n)) if on]
-            label = {"day": "日帰り", "1n2d": "1泊2日", "2n3d": "2泊3日"}
-            with st.spinner("検索中..."):
-                results = {p: search_routes(bases, start_date, end_date, p, fare,
-                                            min_segments=seg_min, max_segments=seg_max,
-                                            top_n=top_n, time_budget_sec=float(budget),
-                                            diversify=diversify, max_per_first_dest=max_per,
-                                            final_dests=finals or None,
-                                            allowed_airports=allowed or None,
-                                            cabin=cabin, objective=objective)
-                           for p in patterns}
-            for p, rts in results.items():
-                if not rts:
-                    st.info(f"{label[p]}: 結果なし")
-                    continue
-                st.subheader(f"📅 {label[p]} — {len(rts)}件")
-                df = pd.DataFrame([route_to_dict(r) for r in rts])
+            r1, r2 = st.columns([2, 1])
+            r1.markdown(f"#### {city(ctx['dep'])}発 ・ {ctx['day']} ・ {stay_jp[ctx['stay']]}　"
+                        f"<span style='color:#666;font-size:0.8em'>{obj_jp[ctx['obj']]}・{len(results)}件</span>", unsafe_allow_html=True)
+            sort_key = r2.selectbox("並び替え", ["lsp", "fop", "time"], format_func=lambda k: {"lsp": "LSP順", "fop": "FOP順", "time": "短時間順"}[k],
+                                    key="sort_key", label_visibility="collapsed")
+            view = st.radio("表示", ["カード", "表"], horizontal=True, key="view", label_visibility="collapsed")
+            if sort_key == "lsp":
+                results = sorted(results, key=lambda r: (-r.lsp, -r.fop))
+            elif sort_key == "fop":
+                results = sorted(results, key=lambda r: (-r.fop, -r.lsp))
+            else:
+                results = sorted(results, key=lambda r: (r.total_minutes / max(r.num_segments, 1)))
+
+            if view == "表":
+                df = pd.DataFrame([route_to_dict(r) for r in results])
                 df["fop_seg"] = (df["fop"] / df["segments"]).round(0).astype(int)
                 show = df[["date", "route", "segments", "airports", "lsp", "fop", "fop_seg", "miles"]]
                 show.columns = ["日付", "ルート", "セグ", "空港数", "LSP", "FOP", "FOP/セグ", "マイル"]
-                st.dataframe(show, width='stretch', hide_index=True,
-                             height=min(420, 50 + len(show) * 35))
-                st.markdown(f"**全ルート詳細 ({len(rts)}件)** — 各便の JAL リンクで運賃・運航を確認")
-                for i, r in enumerate(rts):
-                    path = " → ".join([r.segments[0].origin] + [s.destination for s in r.segments])
-                    est = any(s.miles and getattr(s, "miles_est", False) for s in r.segments)
-                    with st.expander(f"#{i+1} {r.segments[0].flight_date} セグ{r.num_segments}"
-                                     f"/空港{r.num_airports}/LSP{r.lsp} | {path[:80]}"):
+                st.dataframe(show, width='stretch', hide_index=True, height=min(500, 50 + len(show) * 35))
+
+            for i, r in enumerate(results):
+                first, last = r.segments[0], r.segments[-1]
+                names_path = " → ".join([NAMES.get(first.origin, first.origin)] + [NAMES.get(s.destination, s.destination) for s in r.segments])
+                with st.container(border=True):
+                    top = st.columns([1, 3])
+                    if i == 0:
+                        top[0].markdown("<span style='background:#0f6e78;color:#fff;padding:2px 10px;border-radius:6px;font-size:0.8em;font-weight:700'>おすすめ</span>", unsafe_allow_html=True)
+                    else:
+                        top[0].markdown(f"**#{i+1}**")
+                    top[1].caption(f"{r.num_segments}セグ ・ {r.num_airports}空港 ・ {first.dep_time}〜{last.arr_time}"
+                                   + (f" ・ {first.flight_date} 発" if ctx.get('stay') != 'day' or len(set(s.flight_date for s in r.segments)) > 1 else ""))
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("LSP", r.lsp)
+                    m2.metric("FOP", f"{r.fop:,}")
+                    m3.metric("マイル", f"{r.miles:,}")
+                    st.markdown(f"**{names_path}**")
+                    with st.expander("区間の詳細・JALで確認"):
                         rows = [{"便名": s.flight_no, "日付": s.flight_date.isoformat(),
-                                 "区間": f"{s.origin}→{s.destination}", "出発": s.dep_time,
-                                 "到着": s.arr_time, "マイル": s.miles,
-                                 "FOP": fop_per_segment(s.miles, fare, cabin),
+                                 "区間": f"{NAMES.get(s.origin, s.origin)} → {NAMES.get(s.destination, s.destination)}",
+                                 "出発": s.dep_time, "到着": s.arr_time, "マイル": s.miles,
+                                 "FOP": fop_per_segment(s.miles, ctx["fare"], ctx["cabin"]),
                                  "JAL": jal_url(s.origin, s.destination, s.flight_date),
-                                 "Google": google_url(s.origin, s.destination, s.flight_date)}
-                                for s in r.segments]
+                                 "Google": google_url(s.origin, s.destination, s.flight_date)} for s in r.segments]
                         st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True,
-                                     column_config={
-                                         "JAL": st.column_config.LinkColumn("JAL", display_text="🔗"),
-                                         "Google": st.column_config.LinkColumn("Google", display_text="🔗")})
-                        st.caption(f"FOP {r.fop} / マイル {r.miles}"
-                                   + ("  ※一部マイルは推定値" if est else ""))
+                                     column_config={"JAL": st.column_config.LinkColumn("JAL", display_text="JALで確認"),
+                                                    "Google": st.column_config.LinkColumn("Google", display_text="Google")})
+                        if any(getattr(s, "miles_est", False) for s in r.segments):
+                            st.caption("※一部の区間マイルは推定値です")
+
+    st.markdown("---")
+    st.caption("時刻表出典: 駅探 JAL国内線時刻表（週1回自動更新）。本サイトは JAL とは無関係の非公式ツールです。"
+               "運賃は表示しません。予約前に必ず JAL 公式で運航・乗継可否・運賃をご確認ください。"
+               "FOP・ステイタス基準は変更されることがあります。")
 
 with tab_plan:
     st.markdown("### 📈 年間プラン・シミュレーター")
