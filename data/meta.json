@@ -1,9 +1,9 @@
 {
  "source": "ekitan.com (JAL filter)",
- "fetched_at": "2026-09-15",
- "date_from": "2026-09-15",
- "date_to": "2027-02-11",
- "flights": 140359,
+ "fetched_at": "2026-09-20",
+ "date_from": "2026-09-20",
+ "date_to": "2027-02-16",
+ "flights": 140229,
  "airports": 65,
  "airport_names": {
   "AKJ": "旭川",
@@ -43,7 +43,6 @@
   "TKS": "徳島",
   "KUM": "屋久島",
   "HKD": "函館",
-  "OIR": "奥尻",
   "ISG": "新石垣",
   "KMQ": "小松",
   "KUH": "釧路",
@@ -67,9 +66,10 @@
   "MMD": "南大東",
   "UKB": "神戸",
   "TRA": "多良間",
+  "OIR": "奥尻",
   "UEO": "久米島",
-  "SHB": "根室中標津",
   "RIS": "利尻",
+  "SHB": "根室中標津",
   "SHI": "下地島"
  }
 }
