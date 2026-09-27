@@ -1,9 +1,9 @@
 {
  "source": "ekitan.com (JAL filter)",
- "fetched_at": "2026-09-20",
- "date_from": "2026-09-20",
- "date_to": "2027-02-16",
- "flights": 140229,
+ "fetched_at": "2026-09-27",
+ "date_from": "2026-09-27",
+ "date_to": "2027-02-23",
+ "flights": 140025,
  "airports": 65,
  "airport_names": {
   "AKJ": "旭川",
